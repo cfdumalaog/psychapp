@@ -17,87 +17,27 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- 2. CSS STYLING (THEME & DARK MODE FIX) ---
+# --- 2. CSS STYLING ---
 st.markdown("""
     <style>
-    /* 1. Force the Main App Background to Cream/White */
-    .stApp {
-        background-color: #FDFBF7 !important;
-    }
+    .stApp { background-color: #FDFBF7 !important; color: #31333F !important; }
+    .stApp p, .stApp div, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6, .stApp span, .stApp label { color: #31333F !important; }
+    .stChatMessage { background-color: #FFFFFF !important; border: 1px solid #E5E5E5; border-radius: 15px; padding: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 10px; }
+    .stChatMessage * { color: #31333F !important; }
+    .stButton > button { background-color: #E0F2F1 !important; color: #004D40 !important; border: 1px solid #B2DFDB !important; border-radius: 8px; padding: 10px 20px; font-weight: 500; }
+    .stButton > button:hover { background-color: #B2DFDB !important; border-color: #004D40 !important; }
+    .stTextInput > div > div > input { color: #31333F !important; background-color: #FFFFFF !important; }
+    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     
-    /* 2. FORCE ALL TEXT TO BE DARK GREY (Overrides Dark Mode White Text) */
-    .stApp, .stApp p, .stApp div, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6, .stApp span, .stApp label {
-        color: #31333F !important;
-    }
-
-    /* 3. Chat Message Bubbles */
-    .stChatMessage {
-        background-color: #FFFFFF !important;
-        border: 1px solid #E5E5E5;
-        border-radius: 15px;
-        padding: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        margin-bottom: 10px;
-    }
-    
-    /* 4. Ensure text INSIDE bubbles is visible */
-    .stChatMessage * {
-        color: #31333F !important;
-    }
-
-    /* 5. Custom Button Styles (Teal) */
-    .stButton > button {
-        background-color: #E0F2F1 !important;
-        color: #004D40 !important;
-        border: 1px solid #B2DFDB !important;
-        border-radius: 8px;
-        padding: 10px 20px;
-        font-weight: 500;
-    }
-    .stButton > button:hover {
-        background-color: #B2DFDB !important;
-        border-color: #004D40 !important;
-    }
-
-    /* 6. Fix Input Box */
-    .stTextInput > div > div > input {
-        color: #31333F !important;
-        background-color: #FFFFFF !important;
-    }
-    
-    /* 7. Hide Streamlit Chrome */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-
-    /* VOICE MODE ANIMATION */
+    /* Voice Mode Animation */
     @keyframes breathe {
         0% { transform: scale(1); box-shadow: 0 0 20px rgba(100, 181, 246, 0.2); }
         50% { transform: scale(1.1); box-shadow: 0 0 50px rgba(100, 181, 246, 0.5); }
         100% { transform: scale(1); box-shadow: 0 0 20px rgba(100, 181, 246, 0.2); }
     }
-    .voice-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        height: 60vh;
-        margin-top: 50px;
-    }
-    .voice-orb {
-        width: 150px;
-        height: 150px;
-        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); 
-        border-radius: 50%;
-        animation: breathe 4s ease-in-out infinite;
-        margin-bottom: 40px;
-    }
-    .voice-status {
-        font-size: 18px;
-        color: #546E7A !important;
-        font-weight: 500;
-        text-align: center;
-    }
+    .voice-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 60vh; margin-top: 50px; }
+    .voice-orb { width: 150px; height: 150px; background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); border-radius: 50%; animation: breathe 4s ease-in-out infinite; margin-bottom: 40px; }
+    .voice-status { font-size: 18px; color: #546E7A !important; font-weight: 500; text-align: center; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -105,14 +45,12 @@ st.markdown("""
 def load_api_key():
     if "GEMINI_API_KEY" in st.secrets:
         return st.secrets["GEMINI_API_KEY"]
-
     script_dir = os.path.dirname(os.path.abspath(__file__))
     env_path = os.path.join(script_dir, ".env")
     if os.path.exists(env_path):
         env_vals = dotenv_values(env_path)
         key = env_vals.get("GEMINI_API_KEY", "")
         if key: return key.strip().replace("\n", "").replace("\r", "")
-        
     return None
 
 api_key = load_api_key()
@@ -126,7 +64,6 @@ model = genai.GenerativeModel("models/gemini-2.5-flash")
 # --- 4. SESSION STATE SETUP ---
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
-    
     system_prompt = (
         "System: You are Dr. Gemini, an empathetic psychological screening assistant. "
         "Your goal is to screen for Depression (PHQ-9) and Anxiety (GAD-7). "
@@ -152,11 +89,11 @@ if "report_generated" not in st.session_state:
 if "mode" not in st.session_state:
     st.session_state.mode = "chat"
 
-# --- 5. ADVANCED AUDIO FUNCTIONS ---
+# --- 5. ADVANCED AUDIO FUNCTIONS (FIXED) ---
 
 async def generate_neural_voice(text):
     """Generates Human-Like Audio using Edge TTS (Free Neural Voice)"""
-    voice = "en-US-AriaNeural" # Very natural female voice
+    voice = "en-US-AriaNeural" 
     communicate = edge_tts.Communicate(text, voice)
     audio_fp = io.BytesIO()
     async for chunk in communicate.stream():
@@ -166,15 +103,17 @@ async def generate_neural_voice(text):
     return audio_fp
 
 def get_audio_bytes(text):
-    """Wrapper to run async TTS in synchronous Streamlit"""
+    """
+    Robust Wrapper for Async TTS. 
+    Uses asyncio.run() which creates a fresh loop for the operation,
+    avoiding 'Loop is closed' or 'Task attached to different loop' errors.
+    """
     try:
-        # Try High-Quality Neural Voice first
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        audio_fp = loop.run_until_complete(generate_neural_voice(text))
-        return audio_fp
-    except Exception:
-        # Fallback to Robotic gTTS if Edge fails
+        # Attempt 1: Human-Like Voice
+        return asyncio.run(generate_neural_voice(text))
+    except Exception as e:
+        print(f"⚠️ Edge TTS Failed: {e} | Falling back to Standard Voice.")
+        # Attempt 2: Robotic Fallback
         try:
             tts = gTTS(text=text, lang='en')
             audio_fp = io.BytesIO()
@@ -200,7 +139,7 @@ def process_ai_response():
         response = model.generate_content(st.session_state.chat_history)
         ai_text = response.text
         
-        # Generate High Quality Audio
+        # Generate Audio
         audio_bytes = get_audio_bytes(ai_text)
         
         st.session_state.messages.append({
@@ -215,11 +154,10 @@ def process_ai_response():
         return False
 
 # ==========================================
-# VIEW 1: VOICE MODE (ChatGPT Style)
+# VIEW 1: VOICE MODE
 # ==========================================
 if st.session_state.mode == "voice":
     
-    # Minimalist Header
     st.markdown("""
         <div class="voice-container">
             <div class="voice-orb"></div>
@@ -242,7 +180,6 @@ if st.session_state.mode == "voice":
             if process_ai_response():
                 st.rerun()
 
-    # Auto-play latest audio
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
         last_msg = st.session_state.messages[-1]
         if "audio" in last_msg and last_msg["audio"]:
@@ -256,7 +193,7 @@ if st.session_state.mode == "voice":
             st.rerun()
 
 # ==========================================
-# VIEW 2: CHAT MODE (History & Report)
+# VIEW 2: CHAT MODE
 # ==========================================
 else: 
     st.title("🍃 MindfulAI Screener")
@@ -296,7 +233,7 @@ else:
         st.markdown("---")
         if st.button("📋 End Session & Generate Report", type="secondary", use_container_width=True):
             with st.spinner("Analyzing session..."):
-                transcript_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.messages])
+                transcript_text = "\n".join([f"{m['role'].upper()}: {m.get('content','')}" for m in st.session_state.messages])
                 prompt = (
                     transcript_text + 
                     "\n\nCOMMAND: Act as a Senior Clinical Analyst. "
@@ -325,10 +262,10 @@ else:
             st.success("Analysis Complete")
             st.info(f"**Clinical Summary:** {data.get('clinical_summary', 'N/A')}")
             
-            # Improved Dataframe Display
             st.markdown("### 📊 Risk Matrix")
             if "risk_assessment" in data:
                 df = pd.DataFrame(data["risk_assessment"])
+                # Updated to use use_container_width to fix squashing
                 st.dataframe(df, use_container_width=True, hide_index=True)
                 
                 csv = df.to_csv(index=False).encode('utf-8')
