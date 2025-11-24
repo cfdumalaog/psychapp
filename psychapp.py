@@ -30,11 +30,9 @@ st.markdown("""
 
 # --- 3. ROBUST API KEY LOADING ---
 def load_api_key():
-    # 1. Try loading from Streamlit Cloud Secrets first (Best for Cloud)
     if "GEMINI_API_KEY" in st.secrets:
         return st.secrets["GEMINI_API_KEY"]
 
-    # 2. Try loading from local .env file (Best for VS Code)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     env_path = os.path.join(script_dir, ".env")
     if os.path.exists(env_path):
@@ -55,7 +53,9 @@ model = genai.GenerativeModel("models/gemini-2.5-flash")
 
 # --- 4. SESSION STATE SETUP ---
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = (
+    st.session_state.chat_history = []  # Changed to list for multimodal support
+    # Add System Prompt as the first "user" message (hidden logic)
+    system_prompt = (
         "System: You are Dr. Gemini, an empathetic and professional psychological screening assistant. "
         "Your goal is to screen for Depression (PHQ-9) and Anxiety (GAD-7). "
         "RULES:\n"
@@ -64,11 +64,13 @@ if "chat_history" not in st.session_state:
         "3. Do not diagnose. Use phrases like 'The responses suggest'.\n"
         "4. If the user mentions self-harm, immediately provide emergency resources.\n"
     )
+    st.session_state.chat_history.append({"role": "user", "parts": [system_prompt]})
+    st.session_state.chat_history.append({"role": "model", "parts": ["Understood. I am ready to begin the screening."]})
 
 if "messages" not in st.session_state:
-    welcome_msg = "Hello. I am an AI Screening Assistant. I'm here to ask you a few questions about how you've been feeling lately. All answers are confidential. Shall we begin?"
+    welcome_msg = "Hello. I am an AI Screening Assistant. I'm here to ask you a few questions about how you've been feeling lately. You can type or use the microphone. Shall we begin?"
     st.session_state.messages = [{"role": "assistant", "content": welcome_msg}]
-    st.session_state.chat_history += f"Assistant: {welcome_msg}\n"
+    st.session_state.chat_history.append({"role": "model", "parts": [welcome_msg]})
 
 if "report_generated" not in st.session_state:
     st.session_state.report_generated = False
@@ -83,7 +85,8 @@ with st.sidebar:
 
     if st.button("🔄 Reset Interview", type="secondary"):
         st.session_state.messages = []
-        st.session_state.chat_history = "System: Start fresh.\n"
+        st.session_state.chat_history = [] 
+        # Re-initialize system prompt logic handled in section 4 on rerun
         st.session_state.report_generated = False
         if "final_report_json" in st.session_state:
             del st.session_state.final_report_json
@@ -101,28 +104,56 @@ for msg in st.session_state.messages:
         with st.chat_message("user", avatar="👤"): 
             st.write(msg["content"])
 
-# --- 7. CHAT LOGIC ---
+# --- 7. CHAT LOGIC (MULTIMODAL) ---
 if not st.session_state.report_generated:
-    user_input = st.chat_input("Type your answer here...")
+    
+    # A. AUDIO INPUT
+    audio_val = st.audio_input("🎙️ Record your answer")
+    
+    # B. TEXT INPUT
+    text_val = st.chat_input("Type your answer here...")
 
-    if user_input:
-        # 1. User Message
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        st.session_state.chat_history += f"User: {user_input}\n"
+    user_content = None
+    input_type = None
+
+    # Handle Input (Audio takes priority if both exist, usually one at a time)
+    if audio_val:
+        input_type = "audio"
+        user_content = {
+            "mime_type": "audio/wav",
+            "data": audio_val.getvalue()
+        }
+        display_content = "🎤 *[Audio Message Sent]*"
+    elif text_val:
+        input_type = "text"
+        user_content = text_val
+        display_content = text_val
+
+    # Process Input
+    if user_content:
+        # 1. Display User Message
+        st.session_state.messages.append({"role": "user", "content": display_content})
         with st.chat_message("user", avatar="👤"):
-            st.write(user_input)
+            st.write(display_content)
+        
+        # 2. Add to Gemini History
+        if input_type == "audio":
+            st.session_state.chat_history.append({"role": "user", "parts": [user_content]})
+        else:
+            st.session_state.chat_history.append({"role": "user", "parts": [user_content]})
 
-        # 2. AI Response
+        # 3. AI Response
         with st.chat_message("assistant", avatar="🩺"):
             message_placeholder = st.empty()
-            with st.spinner("Thinking..."):
+            with st.spinner("Dr. Gemini is listening..."):
                 try:
+                    # Send entire history (System prompt + conversation + new audio/text)
                     response = model.generate_content(st.session_state.chat_history)
                     ai_text = response.text
                     message_placeholder.write(ai_text)
                     
                     st.session_state.messages.append({"role": "assistant", "content": ai_text})
-                    st.session_state.chat_history += f"Assistant: {ai_text}\n"
+                    st.session_state.chat_history.append({"role": "model", "parts": [ai_text]})
                 except Exception as e:
                     st.error(f"API Error: {e}")
 
@@ -140,11 +171,16 @@ if not st.session_state.report_generated:
             st.toast("⚠️ Please answer a few more questions first!", icon="⚠️")
         else:
             with st.spinner("Generative AI is analyzing clinical markers..."):
-                # We specifically request JSON format here
+                # Construct a text-only history for the analysis step to avoid complexity
+                transcript_text = ""
+                for msg in st.session_state.messages:
+                    transcript_text += f"{msg['role'].upper()}: {msg['content']}\n"
+
                 analysis_prompt = (
-                    st.session_state.chat_history + 
+                    transcript_text + 
                     "\n\nCOMMAND: The interview is over. Act as a Senior Clinical Analyst. "
-                    "Analyze the conversation above and output a strictly valid JSON object with the following structure:\n"
+                    "Analyze the conversation transcript above. "
+                    "Output a strictly valid JSON object with the following structure:\n"
                     "{\n"
                     '  "clinical_summary": "string paragraph",\n'
                     '  "risk_assessment": [\n'
@@ -157,13 +193,11 @@ if not st.session_state.report_generated:
                 )
                 
                 try:
-                    # Request JSON mode from Gemini
                     report_resp = model.generate_content(
                         analysis_prompt,
                         generation_config={"response_mime_type": "application/json"}
                     )
                     
-                    # Store the JSON string directly
                     st.session_state.final_report_json = report_resp.text
                     st.session_state.report_generated = True
                     st.rerun()
@@ -173,26 +207,18 @@ if not st.session_state.report_generated:
 # --- 9. DISPLAY REPORT (Post-Session) ---
 if st.session_state.report_generated and "final_report_json" in st.session_state:
     try:
-        # Parse the JSON
         report_data = json.loads(st.session_state.final_report_json)
         
         st.success("Assessment Complete")
         st.markdown("### 📄 Clinical Summary")
         st.info(report_data.get("clinical_summary", "No summary available."))
         
-        # --- PANDAS DATAFRAME DISPLAY ---
         st.markdown("### 📊 Risk Assessment Matrix")
-        
         if "risk_assessment" in report_data:
-            # Create DataFrame
             df = pd.DataFrame(report_data["risk_assessment"])
+            st.table(df)
             
-            # Display using Streamlit's DataFrame component (interactive) or Table (static)
-            st.table(df) # st.table is often better for reports as it shows full text
-            
-            # Create CSV for download
             csv_data = df.to_csv(index=False).encode('utf-8')
-            
             st.download_button(
                 label="💾 Download Risk Report (CSV)",
                 data=csv_data,
@@ -206,8 +232,7 @@ if st.session_state.report_generated and "final_report_json" in st.session_state
             st.write(f"- {rec}")
             
     except json.JSONDecodeError:
-        st.error("Error parsing the AI report. Please try generating again.")
-        # Fallback to showing raw text if JSON fails
+        st.error("Error parsing the AI report.")
         st.text(st.session_state.final_report_json)
 
     if st.button("Start New Patient"):
