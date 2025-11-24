@@ -2,9 +2,10 @@ import streamlit as st
 import google.generativeai as genai
 import os
 import pandas as pd
+import json
 from dotenv import dotenv_values
 
-# --- 1. PAGE CONFIGURATION (Must be the first Streamlit command) ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="MindfulAI Screening",
     page_icon="🧠",
@@ -12,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. CUSTOM CSS FOR "APP-LIKE" FEEL ---
+# --- 2. CUSTOM CSS ---
 st.markdown("""
     <style>
     /* Hide Streamlit default menu and footer */
@@ -29,19 +30,24 @@ st.markdown("""
 
 # --- 3. ROBUST API KEY LOADING ---
 def load_api_key():
-    # Looks for .env in the same folder as this script
+    # 1. Try loading from Streamlit Cloud Secrets first (Best for Cloud)
+    if "GEMINI_API_KEY" in st.secrets:
+        return st.secrets["GEMINI_API_KEY"]
+
+    # 2. Try loading from local .env file (Best for VS Code)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     env_path = os.path.join(script_dir, ".env")
     if os.path.exists(env_path):
         env_vals = dotenv_values(env_path)
         key = env_vals.get("GEMINI_API_KEY", "")
         if key: return key.strip().replace("\n", "").replace("\r", "")
+        
     return None
 
 api_key = load_api_key()
 
 if not api_key:
-    st.error("🚨 CRITICAL: GEMINI_API_KEY not found in .env file.")
+    st.error("🚨 CRITICAL: GEMINI_API_KEY not found in .env file or Streamlit Secrets.")
     st.stop()
 
 genai.configure(api_key=api_key)
@@ -49,7 +55,6 @@ model = genai.GenerativeModel("models/gemini-2.5-flash")
 
 # --- 4. SESSION STATE SETUP ---
 if "chat_history" not in st.session_state:
-    # We use a strict system prompt to force the AI to behave professionally
     st.session_state.chat_history = (
         "System: You are Dr. Gemini, an empathetic and professional psychological screening assistant. "
         "Your goal is to screen for Depression (PHQ-9) and Anxiety (GAD-7). "
@@ -61,7 +66,6 @@ if "chat_history" not in st.session_state:
     )
 
 if "messages" not in st.session_state:
-    # Add an initial greeting from the AI
     welcome_msg = "Hello. I am an AI Screening Assistant. I'm here to ask you a few questions about how you've been feeling lately. All answers are confidential. Shall we begin?"
     st.session_state.messages = [{"role": "assistant", "content": welcome_msg}]
     st.session_state.chat_history += f"Assistant: {welcome_msg}\n"
@@ -81,18 +85,20 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.chat_history = "System: Start fresh.\n"
         st.session_state.report_generated = False
+        if "final_report_json" in st.session_state:
+            del st.session_state.final_report_json
         st.rerun()
 
 # --- 6. CHAT INTERFACE ---
 st.title("🧠 MindfulAI Screener")
 
-# Display chat messages with avatars
+# Display chat messages
 for msg in st.session_state.messages:
     if msg["role"] == "assistant":
-        with st.chat_message("assistant", avatar="🩺"): # Doctor icon
+        with st.chat_message("assistant", avatar="🩺"): 
             st.write(msg["content"])
     else:
-        with st.chat_message("user", avatar="👤"): # User icon
+        with st.chat_message("user", avatar="👤"): 
             st.write(msg["content"])
 
 # --- 7. CHAT LOGIC ---
@@ -134,49 +140,76 @@ if not st.session_state.report_generated:
             st.toast("⚠️ Please answer a few more questions first!", icon="⚠️")
         else:
             with st.spinner("Generative AI is analyzing clinical markers..."):
+                # We specifically request JSON format here
                 analysis_prompt = (
                     st.session_state.chat_history + 
                     "\n\nCOMMAND: The interview is over. Act as a Senior Clinical Analyst. "
-                    "Analyze the conversation above and produce a structured Markdown report. "
-                    "Include:\n"
-                    "1. **Clinical Summary**: A brief paragraph observing the patient's state.\n"
-                    "2. **Risk Assessment Table**: Columns for [Condition, Risk Level (Low/Med/High), Evidence]. Cover Depression, Anxiety, and Burnout.\n"
-                    "3. **Recommendations**: 3 bullet points for next steps."
+                    "Analyze the conversation above and output a strictly valid JSON object with the following structure:\n"
+                    "{\n"
+                    '  "clinical_summary": "string paragraph",\n'
+                    '  "risk_assessment": [\n'
+                    '    {"Condition": "Depression (PHQ-9)", "Risk Level": "Low/Medium/High", "Evidence": "short text"},\n'
+                    '    {"Condition": "Anxiety (GAD-7)", "Risk Level": "Low/Medium/High", "Evidence": "short text"},\n'
+                    '    {"Condition": "Burnout", "Risk Level": "Low/Medium/High", "Evidence": "short text"}\n'
+                    '  ],\n'
+                    '  "recommendations": ["string", "string", "string"]\n'
+                    "}"
                 )
                 
                 try:
-                    report_resp = model.generate_content(analysis_prompt)
-                    report_text = report_resp.text
-                    st.session_state.report_generated = True
+                    # Request JSON mode from Gemini
+                    report_resp = model.generate_content(
+                        analysis_prompt,
+                        generation_config={"response_mime_type": "application/json"}
+                    )
                     
-                    # Force a rerun to hide the chat input and show the report
-                    st.session_state.final_report = report_text 
+                    # Store the JSON string directly
+                    st.session_state.final_report_json = report_resp.text
+                    st.session_state.report_generated = True
                     st.rerun()
                 except Exception as e:
                     st.error(f"Analysis Failed: {e}")
 
 # --- 9. DISPLAY REPORT (Post-Session) ---
-if st.session_state.report_generated and "final_report" in st.session_state:
-    st.success("Assessment Complete")
-    
-    with st.container(border=True):
-        st.markdown(st.session_state.final_report)
-    
-    # Download Section
-    csv_data = pd.DataFrame({
-        "Timestamp": [pd.Timestamp.now()],
-        "Report": [st.session_state.final_report],
-        "Transcript": [st.session_state.chat_history]
-    }).to_csv(index=False).encode('utf-8')
-    
-    st.download_button(
-        label="💾 Download Clinical Record (CSV)",
-        data=csv_data,
-        file_name="clinical_assessment.csv",
-        mime="text/csv",
-        type="primary"
-    )
-    
+if st.session_state.report_generated and "final_report_json" in st.session_state:
+    try:
+        # Parse the JSON
+        report_data = json.loads(st.session_state.final_report_json)
+        
+        st.success("Assessment Complete")
+        st.markdown("### 📄 Clinical Summary")
+        st.info(report_data.get("clinical_summary", "No summary available."))
+        
+        # --- PANDAS DATAFRAME DISPLAY ---
+        st.markdown("### 📊 Risk Assessment Matrix")
+        
+        if "risk_assessment" in report_data:
+            # Create DataFrame
+            df = pd.DataFrame(report_data["risk_assessment"])
+            
+            # Display using Streamlit's DataFrame component (interactive) or Table (static)
+            st.table(df) # st.table is often better for reports as it shows full text
+            
+            # Create CSV for download
+            csv_data = df.to_csv(index=False).encode('utf-8')
+            
+            st.download_button(
+                label="💾 Download Risk Report (CSV)",
+                data=csv_data,
+                file_name="risk_assessment_matrix.csv",
+                mime="text/csv",
+                type="primary"
+            )
+        
+        st.markdown("### 🩺 Recommendations")
+        for rec in report_data.get("recommendations", []):
+            st.write(f"- {rec}")
+            
+    except json.JSONDecodeError:
+        st.error("Error parsing the AI report. Please try generating again.")
+        # Fallback to showing raw text if JSON fails
+        st.text(st.session_state.final_report_json)
+
     if st.button("Start New Patient"):
         st.session_state.clear()
         st.rerun()
