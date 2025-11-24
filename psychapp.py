@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import json
 import io
+import time
 from dotenv import dotenv_values
 from gtts import gTTS
 
@@ -18,49 +19,39 @@ st.set_page_config(
 # --- 2. THERAPY THEME & CUSTOM CSS ---
 st.markdown("""
     <style>
-    /* 1. Force Light/Calming Theme Background & Dark Text */
+    /* 1. Force Light/Calming Theme */
     .stApp {
         background-color: #FDFBF7; /* Soft Cream */
-        color: #31333F !important; /* Force Dark Grey Text */
+        color: #31333F !important;
     }
     
-    /* 2. Style Chat Messages */
+    /* 2. Chat Bubbles */
     .stChatMessage {
         background-color: #FFFFFF;
         border-radius: 15px;
         padding: 15px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         margin-bottom: 10px;
-        color: #31333F !important; /* Force text color inside bubbles */
     }
     
-    /* 3. Force Markdown text inside bubbles to be dark */
+    /* 3. Text Colors */
     .stChatMessage p, .stChatMessage div, .stChatMessage span {
         color: #31333F !important;
     }
 
-    /* 4. Custom Button Styles (Teal/Sage) */
+    /* 4. Button Styles */
     .stButton > button {
         background-color: #E0F2F1;
         color: #004D40 !important;
         border: 1px solid #B2DFDB;
         border-radius: 8px;
         padding: 10px 20px;
-        font-weight: 500;
     }
     .stButton > button:hover {
         background-color: #B2DFDB;
-        color: #004D40 !important;
-        border-color: #004D40;
     }
     
-    /* 5. Headers */
-    h1, h2, h3, h4, h5, h6 {
-        color: #263238 !important;
-        font-family: 'Helvetica Neue', sans-serif;
-    }
-    
-    /* 6. Hide default elements */
+    /* 5. Hide standard elements */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
@@ -82,12 +73,12 @@ def load_api_key():
     return None
 
 api_key = load_api_key()
-
 if not api_key:
     st.error("🚨 CRITICAL: GEMINI_API_KEY not found.")
     st.stop()
 
 genai.configure(api_key=api_key)
+# Use Flash for fast reasoning
 model = genai.GenerativeModel("models/gemini-2.5-flash")
 
 # --- 4. SESSION STATE SETUP ---
@@ -95,171 +86,159 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
     
     # SYSTEM PROMPT
-    # We explicitly ask the model to transcribe audio if present.
     system_prompt = (
         "System: You are Dr. Gemini, an empathetic psychological screening assistant. "
         "Your goal is to screen for Depression (PHQ-9) and Anxiety (GAD-7). "
         "PROTOCOL:\n"
-        "1. If the user sends AUDIO, start your response with 'TRANSCRIPT: [what they said]'.\n"
-        "2. Ask exactly ONE question at a time.\n"
-        "3. Do not diagnose.\n"
+        "1. Ask exactly ONE question at a time.\n"
+        "2. Do not diagnose.\n"
+        "3. Keep responses concise (2-3 sentences max) to allow for spoken conversation."
     )
     st.session_state.chat_history.append({"role": "user", "parts": [system_prompt]})
-    st.session_state.chat_history.append({"role": "model", "parts": ["Understood. I am ready."]})
+    st.session_state.chat_history.append({"role": "model", "parts": ["Understood."]})
 
 if "messages" not in st.session_state:
-    welcome_msg = "Hello. I am here to listen. How have you been feeling lately? (You can type or speak)"
+    welcome_msg = "Hello. I am here to listen. How have you been feeling lately?"
     st.session_state.messages = [{"role": "assistant", "content": welcome_msg}]
     st.session_state.chat_history.append({"role": "model", "parts": [welcome_msg]})
+
+if "last_processed_audio" not in st.session_state:
+    st.session_state.last_processed_audio = None
 
 if "report_generated" not in st.session_state:
     st.session_state.report_generated = False
 
-# --- 5. SIDEBAR CONTROLS ---
+# --- 5. SIDEBAR ---
 with st.sidebar:
     st.title("🍃 Controls")
-    
-    with st.expander("ℹ️ About this Session"):
-        st.caption("This is a safe, confidential space for screening. Not a replacement for professional help.")
-
     if st.button("🔄 Start Fresh", type="secondary"):
         st.session_state.messages = []
         st.session_state.chat_history = [] 
         st.session_state.report_generated = False
+        st.session_state.last_processed_audio = None
         if "final_report_json" in st.session_state:
             del st.session_state.final_report_json
         st.rerun()
 
-# --- 6. CHAT INTERFACE ---
+# --- 6. HELPER FUNCTIONS ---
+def transcribe_audio(audio_bytes):
+    """Explicitly transcribe audio to text using Gemini before processing."""
+    try:
+        # We make a separate call just to get the text, ensuring accuracy
+        transcribe_model = genai.GenerativeModel("models/gemini-2.5-flash")
+        response = transcribe_model.generate_content([
+            "Transcribe the spoken speech in this audio exactly. Output ONLY the text.",
+            {"mime_type": "audio/wav", "data": audio_bytes}
+        ])
+        return response.text.strip()
+    except Exception as e:
+        return f"[Error in Transcription: {e}]"
+
+def text_to_speech_autoplay(text):
+    """Generates audio and returns the bytes for autoplay"""
+    try:
+        tts = gTTS(text=text, lang='en')
+        audio_fp = io.BytesIO()
+        tts.write_to_fp(audio_fp)
+        audio_fp.seek(0)
+        return audio_fp
+    except Exception:
+        return None
+
+# --- 7. MAIN INTERFACE ---
 st.title("🍃 MindfulAI Screener")
 
-# Display chat messages
+# Display History
 for msg in st.session_state.messages:
     if msg["role"] == "assistant":
         with st.chat_message("assistant", avatar="🌿"): 
             st.write(msg["content"])
-            # If there was audio associated with this message, play it
-            if "audio" in msg:
+            if "audio" in msg and msg["audio"] is not None:
                  st.audio(msg["audio"], format="audio/mp3", start_time=0)
     else:
         with st.chat_message("user", avatar="👤"): 
             st.write(msg["content"])
 
-# --- 7. CHAT LOGIC (MULTIMODAL + TTS) ---
+# --- 8. INPUT LOGIC ---
 if not st.session_state.report_generated:
     
-    # A. INPUTS
-    audio_val = st.audio_input("🎙️ Speak your answer")
-    text_val = st.chat_input("Or type your answer here...")
+    # We put inputs in a container at the bottom
+    with st.container():
+        # Audio Input
+        audio_val = st.audio_input("🎙️ Tap to Speak (Auto-Transcribe)")
+        # Text Input
+        text_val = st.chat_input("Or type your answer...")
 
-    user_content = None
-    input_type = None
-    display_content = ""
+    user_text = ""
+    is_audio = False
 
-    # B. HANDLE INPUTS
-    if audio_val:
-        input_type = "audio"
-        audio_bytes = audio_val.getvalue()
-        user_content = {
-            "mime_type": "audio/wav",
-            "data": audio_bytes
-        }
-        display_content = "🔊 *Audio received... processing transcript...*"
+    # A. HANDLE AUDIO
+    # We check if audio_val exists and if it's different from the last one we processed
+    if audio_val and audio_val != st.session_state.last_processed_audio:
+        st.session_state.last_processed_audio = audio_val
+        is_audio = True
         
-    elif text_val:
-        input_type = "text"
-        user_content = text_val
-        display_content = text_val
-
-    # C. PROCESS INTERACTION
-    if user_content:
-        # 1. Show User Message Immediately
-        st.session_state.messages.append({"role": "user", "content": display_content})
-        with st.chat_message("user", avatar="👤"):
-            st.write(display_content)
-        
-        # 2. Add to History
-        st.session_state.chat_history.append({"role": "user", "parts": [user_content]})
-
-        # 3. Generate AI Response
-        with st.chat_message("assistant", avatar="🌿"):
-            message_placeholder = st.empty()
+        with st.spinner("🎧 Transcribing your voice..."):
+            audio_bytes = audio_val.getvalue()
+            # 1. Transcribe First (Fixes "Not Recording" issue)
+            transcript = transcribe_audio(audio_bytes)
+            user_text = transcript
             
-            with st.spinner("Listening & Thinking..."):
-                try:
-                    # Call Gemini
-                    response = model.generate_content(st.session_state.chat_history)
-                    full_response = response.text
-                    
-                    # 4. Parse Transcript (if audio was used)
-                    clean_response = full_response
-                    transcript_text = ""
-                    
-                    if "TRANSCRIPT:" in full_response:
-                        parts = full_response.split("TRANSCRIPT:")
-                        if len(parts) > 1:
-                            temp = parts[1].split("\n", 1)
-                            transcript_text = temp[0].strip()
-                            if len(temp) > 1:
-                                clean_response = temp[1].strip()
-                            else:
-                                clean_response = "" 
-                    
-                    # 5. Display Updates
-                    if transcript_text:
-                        st.info(f"📝 I heard you say: \"{transcript_text}\"")
-                        st.session_state.messages[-1]["content"] = f"🎙️ \"{transcript_text}\""
-                        
-                    message_placeholder.write(clean_response)
-                    
-                    # 6. Generate Voice (TTS)
-                    if clean_response:
-                        try:
-                            # Using gTTS for voice generation
-                            tts = gTTS(text=clean_response, lang='en')
-                            audio_fp = io.BytesIO()
-                            tts.write_to_fp(audio_fp)
-                            audio_fp.seek(0)
-                            
-                            # Play Audio
-                            st.audio(audio_fp, format='audio/mp3', autoplay=True)
-                            
-                            # Save to state
-                            st.session_state.messages.append({
-                                "role": "assistant", 
-                                "content": clean_response,
-                                "audio": audio_fp
-                            })
-                            st.session_state.chat_history.append({"role": "model", "parts": [clean_response]})
-                            
-                        except Exception as e:
-                            st.warning(f"Could not generate voice: {e}")
-                            st.session_state.messages.append({"role": "assistant", "content": clean_response})
-                            st.session_state.chat_history.append({"role": "model", "parts": [clean_response]})
+    # B. HANDLE TEXT
+    elif text_val:
+        user_text = text_val
 
-                except Exception as e:
-                    st.error(f"API Error: {e}")
+    # C. PROCESS RESPONSE
+    if user_text:
+        # 1. Display User Msg
+        display_text = f"🎙️ {user_text}" if is_audio else user_text
+        st.session_state.messages.append({"role": "user", "content": display_text})
+        
+        # Add to Gemini History (Using Text ensures clarity for the model)
+        st.session_state.chat_history.append({"role": "user", "parts": [user_text]})
+        
+        # Force a UI update immediately to show user text
+        st.rerun()
 
-# --- 8. REPORT GENERATION ---
+# --- 9. AI REPLY GENERATION (Runs on Rerun) ---
+# Check if the last message was from User, if so, generate AI reply
+if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+    with st.chat_message("assistant", avatar="🌿"):
+        with st.spinner("Dr. Gemini is thinking..."):
+            try:
+                # 1. Get Text Response
+                response = model.generate_content(st.session_state.chat_history)
+                ai_text = response.text
+                
+                # 2. Generate Voice
+                audio_bytes = text_to_speech_autoplay(ai_text)
+                
+                # 3. Save & Display
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": ai_text,
+                    "audio": audio_bytes
+                })
+                st.session_state.chat_history.append({"role": "model", "parts": [ai_text]})
+                
+                # 4. Auto-Play (By rerunning, the new message with audio will be rendered at top)
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# --- 10. REPORT SECTION ---
 if not st.session_state.report_generated:
     st.markdown("---")
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.caption("Ready to view results?")
-    with col2:
-        finish_btn = st.button("📋 Generate Report", type="primary", use_container_width=True)
-
-    if finish_btn:
-        with st.spinner("Analyzing session data..."):
-            transcript_text = ""
-            for msg in st.session_state.messages:
-                content = msg.get('content', '')
-                transcript_text += f"{msg['role'].upper()}: {content}\n"
-
-            analysis_prompt = (
-                transcript_text + 
+    if st.button("📋 End Session & Generate Report", type="primary", use_container_width=True):
+        with st.spinner("Analyzing session..."):
+            # Prepare transcript
+            full_transcript = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.messages])
+            
+            prompt = (
+                full_transcript + 
                 "\n\nCOMMAND: Act as a Senior Clinical Analyst. "
-                "Analyze the transcript. Output strictly valid JSON:\n"
+                "Analyze the transcript above. Output strictly valid JSON:\n"
                 "{\n"
                 '  "clinical_summary": "string",\n'
                 '  "risk_assessment": [\n'
@@ -272,37 +251,30 @@ if not st.session_state.report_generated:
             )
             
             try:
-                report_resp = model.generate_content(
-                    analysis_prompt,
-                    generation_config={"response_mime_type": "application/json"}
-                )
-                st.session_state.final_report_json = report_resp.text
+                resp = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+                st.session_state.final_report_json = resp.text
                 st.session_state.report_generated = True
                 st.rerun()
             except Exception as e:
                 st.error(f"Analysis Failed: {e}")
 
-# --- 9. DISPLAY REPORT ---
+# --- 11. REPORT DISPLAY ---
 if st.session_state.report_generated and "final_report_json" in st.session_state:
     try:
-        report_data = json.loads(st.session_state.final_report_json)
-        
+        data = json.loads(st.session_state.final_report_json)
         st.success("Analysis Complete")
-        st.markdown("### 📄 Clinical Summary")
-        st.info(report_data.get("clinical_summary", "N/A"))
+        st.info(f"**Clinical Summary:** {data.get('clinical_summary', 'N/A')}")
         
-        st.markdown("### 📊 Risk Assessment")
-        if "risk_assessment" in report_data:
-            df = pd.DataFrame(report_data["risk_assessment"])
+        if "risk_assessment" in data:
+            df = pd.DataFrame(data["risk_assessment"])
             st.table(df)
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button("💾 Download CSV", csv, "assessment.csv", "text/csv")
             
-            csv_data = df.to_csv(index=False).encode('utf-8')
-            st.download_button("💾 Download CSV", csv_data, "assessment.csv", "text/csv")
-            
-    except Exception:
-        st.error("Report Parsing Error")
-        st.text(st.session_state.final_report_json)
-
+    except:
+        st.error("Could not parse report.")
+        st.write(st.session_state.final_report_json)
+    
     if st.button("Start New Patient"):
         st.session_state.clear()
         st.rerun()
