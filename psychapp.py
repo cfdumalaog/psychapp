@@ -4,7 +4,8 @@ import os
 import pandas as pd
 import json
 import io
-import time
+import asyncio
+import edge_tts
 from dotenv import dotenv_values
 from gtts import gTTS
 
@@ -16,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- 2. CSS STYLING (THEME FIX) ---
+# --- 2. CSS STYLING (THEME & DARK MODE FIX) ---
 st.markdown("""
     <style>
     /* 1. Force the Main App Background to Cream/White */
@@ -25,7 +26,7 @@ st.markdown("""
     }
     
     /* 2. FORCE ALL TEXT TO BE DARK GREY (Overrides Dark Mode White Text) */
-    .stApp, .stApp p, .stApp div, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6, .stApp span {
+    .stApp, .stApp p, .stApp div, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6, .stApp span, .stApp label {
         color: #31333F !important;
     }
 
@@ -44,7 +45,7 @@ st.markdown("""
         color: #31333F !important;
     }
 
-    /* 5. Custom Button Styles (Teal) - Fix text color for buttons */
+    /* 5. Custom Button Styles (Teal) */
     .stButton > button {
         background-color: #E0F2F1 !important;
         color: #004D40 !important;
@@ -58,7 +59,7 @@ st.markdown("""
         border-color: #004D40 !important;
     }
 
-    /* 6. Fix Input Box (Make it match the theme) */
+    /* 6. Fix Input Box */
     .stTextInput > div > div > input {
         color: #31333F !important;
         background-color: #FFFFFF !important;
@@ -69,7 +70,7 @@ st.markdown("""
     footer {visibility: hidden;}
     header {visibility: hidden;}
 
-    /* VOICE MODE STYLES */
+    /* VOICE MODE ANIMATION */
     @keyframes breathe {
         0% { transform: scale(1); box-shadow: 0 0 20px rgba(100, 181, 246, 0.2); }
         50% { transform: scale(1.1); box-shadow: 0 0 50px rgba(100, 181, 246, 0.5); }
@@ -84,8 +85,8 @@ st.markdown("""
         margin-top: 50px;
     }
     .voice-orb {
-        width: 180px;
-        height: 180px;
+        width: 150px;
+        height: 150px;
         background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); 
         border-radius: 50%;
         animation: breathe 4s ease-in-out infinite;
@@ -126,7 +127,6 @@ model = genai.GenerativeModel("models/gemini-2.5-flash")
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
     
-    # SYSTEM PROMPT
     system_prompt = (
         "System: You are Dr. Gemini, an empathetic psychological screening assistant. "
         "Your goal is to screen for Depression (PHQ-9) and Anxiety (GAD-7). "
@@ -150,9 +150,40 @@ if "report_generated" not in st.session_state:
     st.session_state.report_generated = False
 
 if "mode" not in st.session_state:
-    st.session_state.mode = "chat" # Options: 'chat', 'voice'
+    st.session_state.mode = "chat"
 
-# --- 5. HELPER FUNCTIONS ---
+# --- 5. ADVANCED AUDIO FUNCTIONS ---
+
+async def generate_neural_voice(text):
+    """Generates Human-Like Audio using Edge TTS (Free Neural Voice)"""
+    voice = "en-US-AriaNeural" # Very natural female voice
+    communicate = edge_tts.Communicate(text, voice)
+    audio_fp = io.BytesIO()
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            audio_fp.write(chunk["data"])
+    audio_fp.seek(0)
+    return audio_fp
+
+def get_audio_bytes(text):
+    """Wrapper to run async TTS in synchronous Streamlit"""
+    try:
+        # Try High-Quality Neural Voice first
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        audio_fp = loop.run_until_complete(generate_neural_voice(text))
+        return audio_fp
+    except Exception:
+        # Fallback to Robotic gTTS if Edge fails
+        try:
+            tts = gTTS(text=text, lang='en')
+            audio_fp = io.BytesIO()
+            tts.write_to_fp(audio_fp)
+            audio_fp.seek(0)
+            return audio_fp
+        except:
+            return None
+
 def transcribe_audio(audio_bytes):
     try:
         transcribe_model = genai.GenerativeModel("models/gemini-2.5-flash")
@@ -161,24 +192,16 @@ def transcribe_audio(audio_bytes):
             {"mime_type": "audio/wav", "data": audio_bytes}
         ])
         return response.text.strip()
-    except Exception as e:
-        return f"[Transcription Error]"
-
-def text_to_speech_autoplay(text):
-    try:
-        tts = gTTS(text=text, lang='en')
-        audio_fp = io.BytesIO()
-        tts.write_to_fp(audio_fp)
-        audio_fp.seek(0)
-        return audio_fp
     except Exception:
-        return None
+        return "[Unintelligible Audio]"
 
 def process_ai_response():
     try:
         response = model.generate_content(st.session_state.chat_history)
         ai_text = response.text
-        audio_bytes = text_to_speech_autoplay(ai_text)
+        
+        # Generate High Quality Audio
+        audio_bytes = get_audio_bytes(ai_text)
         
         st.session_state.messages.append({
             "role": "assistant", 
@@ -192,13 +215,15 @@ def process_ai_response():
         return False
 
 # ==========================================
-# VIEW 1: VOICE MODE
+# VIEW 1: VOICE MODE (ChatGPT Style)
 # ==========================================
 if st.session_state.mode == "voice":
+    
+    # Minimalist Header
     st.markdown("""
         <div class="voice-container">
             <div class="voice-orb"></div>
-            <div class="voice-status">Listening...</div>
+            <div class="voice-status">Dr. Gemini is listening...</div>
         </div>
     """, unsafe_allow_html=True)
     
@@ -207,25 +232,23 @@ if st.session_state.mode == "voice":
     if audio_val and audio_val != st.session_state.last_processed_audio:
         st.session_state.last_processed_audio = audio_val
         
-        with st.spinner("Processing voice..."):
+        with st.spinner("Thinking..."):
             audio_bytes = audio_val.getvalue()
             transcript = transcribe_audio(audio_bytes)
             
-            # Save User Input
             st.session_state.messages.append({"role": "user", "content": f"🎙️ {transcript}"})
             st.session_state.chat_history.append({"role": "user", "parts": [transcript]})
             
-            # Generate AI Response
             if process_ai_response():
                 st.rerun()
 
-    # Auto-play audio
+    # Auto-play latest audio
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
         last_msg = st.session_state.messages[-1]
         if "audio" in last_msg and last_msg["audio"]:
              st.audio(last_msg["audio"], format="audio/mp3", autoplay=True)
 
-    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("❌ Exit Voice Mode", use_container_width=True):
@@ -233,7 +256,7 @@ if st.session_state.mode == "voice":
             st.rerun()
 
 # ==========================================
-# VIEW 2: CHAT MODE
+# VIEW 2: CHAT MODE (History & Report)
 # ==========================================
 else: 
     st.title("🍃 MindfulAI Screener")
@@ -302,9 +325,12 @@ else:
             st.success("Analysis Complete")
             st.info(f"**Clinical Summary:** {data.get('clinical_summary', 'N/A')}")
             
+            # Improved Dataframe Display
+            st.markdown("### 📊 Risk Matrix")
             if "risk_assessment" in data:
                 df = pd.DataFrame(data["risk_assessment"])
-                st.table(df)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                
                 csv = df.to_csv(index=False).encode('utf-8')
                 st.download_button("💾 Download CSV", csv, "assessment.csv", "text/csv")
         except:
