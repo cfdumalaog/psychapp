@@ -18,42 +18,52 @@ st.set_page_config(
 # --- 2. THERAPY THEME & CUSTOM CSS ---
 st.markdown("""
     <style>
-    /* 1. Force Light/Calming Theme Background */
+    /* 1. Force Light/Calming Theme Background & Dark Text */
     .stApp {
-        background-color: #FDFBF7; /* Soft Cream/White */
+        background-color: #FDFBF7; /* Soft Cream */
+        color: #31333F !important; /* Force Dark Grey Text */
     }
     
     /* 2. Style Chat Messages */
     .stChatMessage {
         background-color: #FFFFFF;
         border-radius: 15px;
-        padding: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        padding: 15px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         margin-bottom: 10px;
+        color: #31333F !important; /* Force text color inside bubbles */
     }
     
-    /* 3. Custom Button Styles (Teal/Sage) */
+    /* 3. Force Markdown text inside bubbles to be dark */
+    .stChatMessage p, .stChatMessage div, .stChatMessage span {
+        color: #31333F !important;
+    }
+
+    /* 4. Custom Button Styles (Teal/Sage) */
     .stButton > button {
-        background-color: #E0F2F1; /* Soft Teal */
-        color: #004D40;
-        border: none;
+        background-color: #E0F2F1;
+        color: #004D40 !important;
+        border: 1px solid #B2DFDB;
         border-radius: 8px;
         padding: 10px 20px;
+        font-weight: 500;
     }
     .stButton > button:hover {
         background-color: #B2DFDB;
+        color: #004D40 !important;
+        border-color: #004D40;
     }
     
-    /* 4. Hide default elements */
+    /* 5. Headers */
+    h1, h2, h3, h4, h5, h6 {
+        color: #263238 !important;
+        font-family: 'Helvetica Neue', sans-serif;
+    }
+    
+    /* 6. Hide default elements */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-    
-    /* 5. Headers */
-    h1, h2, h3 {
-        color: #263238; /* Soft Dark Blue-Grey */
-        font-family: 'Helvetica Neue', sans-serif;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -128,7 +138,7 @@ for msg in st.session_state.messages:
     if msg["role"] == "assistant":
         with st.chat_message("assistant", avatar="🌿"): 
             st.write(msg["content"])
-            # If there was audio associated with this message (optional feature), play it
+            # If there was audio associated with this message, play it
             if "audio" in msg:
                  st.audio(msg["audio"], format="audio/mp3", start_time=0)
     else:
@@ -139,7 +149,6 @@ for msg in st.session_state.messages:
 if not st.session_state.report_generated:
     
     # A. INPUTS
-    # We use a columns layout to make it look cleaner
     audio_val = st.audio_input("🎙️ Speak your answer")
     text_val = st.chat_input("Or type your answer here...")
 
@@ -150,7 +159,6 @@ if not st.session_state.report_generated:
     # B. HANDLE INPUTS
     if audio_val:
         input_type = "audio"
-        # Get bytes from audio buffer
         audio_bytes = audio_val.getvalue()
         user_content = {
             "mime_type": "audio/wav",
@@ -189,21 +197,17 @@ if not st.session_state.report_generated:
                     
                     if "TRANSCRIPT:" in full_response:
                         parts = full_response.split("TRANSCRIPT:")
-                        # The part after TRANSCRIPT: is the text, up to the next newline or end
-                        # But often Gemini mixes them. Let's try a simple split.
                         if len(parts) > 1:
-                            # We assume the model puts TRANSCRIPT: [text] \n [Real Reply]
                             temp = parts[1].split("\n", 1)
                             transcript_text = temp[0].strip()
                             if len(temp) > 1:
                                 clean_response = temp[1].strip()
                             else:
-                                clean_response = "" # Edge case if model only output transcript
+                                clean_response = "" 
                     
                     # 5. Display Updates
                     if transcript_text:
                         st.info(f"📝 I heard you say: \"{transcript_text}\"")
-                        # Update the previous user message in state to show the transcript instead of placeholder
                         st.session_state.messages[-1]["content"] = f"🎙️ \"{transcript_text}\""
                         
                     message_placeholder.write(clean_response)
@@ -211,6 +215,7 @@ if not st.session_state.report_generated:
                     # 6. Generate Voice (TTS)
                     if clean_response:
                         try:
+                            # Using gTTS for voice generation
                             tts = gTTS(text=clean_response, lang='en')
                             audio_fp = io.BytesIO()
                             tts.write_to_fp(audio_fp)
@@ -229,7 +234,6 @@ if not st.session_state.report_generated:
                             
                         except Exception as e:
                             st.warning(f"Could not generate voice: {e}")
-                            # Fallback if TTS fails
                             st.session_state.messages.append({"role": "assistant", "content": clean_response})
                             st.session_state.chat_history.append({"role": "model", "parts": [clean_response]})
 
@@ -247,7 +251,6 @@ if not st.session_state.report_generated:
 
     if finish_btn:
         with st.spinner("Analyzing session data..."):
-            # Create text-only transcript for analysis
             transcript_text = ""
             for msg in st.session_state.messages:
                 content = msg.get('content', '')
