@@ -1,4 +1,3 @@
 pandas
 google.generativeai
 dotenv
-os
