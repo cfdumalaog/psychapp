@@ -13,39 +13,68 @@ st.set_page_config(
     page_title="MindfulAI Screening",
     page_icon="🍃",
     layout="centered",
-    initial_sidebar_state="collapsed" # Hide sidebar by default for cleaner look
+    initial_sidebar_state="collapsed"
 )
 
-# --- 2. CSS STYLING (Voice Mode & Chat Mode) ---
+# --- 2. CSS STYLING (THEME FIX) ---
 st.markdown("""
     <style>
-    /* GLOBAL THEME */
+    /* 1. Force the Main App Background to Cream/White */
     .stApp {
-        background-color: #FDFBF7; /* Soft Cream */
-        color: #31333F !important;
+        background-color: #FDFBF7 !important;
     }
     
-    /* HIDE DEFAULT ELEMENTS */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    
-    /* CHAT MODE STYLES */
+    /* 2. FORCE ALL TEXT TO BE DARK GREY (Overrides Dark Mode White Text) */
+    .stApp, .stApp p, .stApp div, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6, .stApp span {
+        color: #31333F !important;
+    }
+
+    /* 3. Chat Message Bubbles */
     .stChatMessage {
-        background-color: #FFFFFF;
+        background-color: #FFFFFF !important;
+        border: 1px solid #E5E5E5;
         border-radius: 15px;
         padding: 15px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         margin-bottom: 10px;
     }
     
-    /* VOICE MODE ORB ANIMATION */
+    /* 4. Ensure text INSIDE bubbles is visible */
+    .stChatMessage * {
+        color: #31333F !important;
+    }
+
+    /* 5. Custom Button Styles (Teal) - Fix text color for buttons */
+    .stButton > button {
+        background-color: #E0F2F1 !important;
+        color: #004D40 !important;
+        border: 1px solid #B2DFDB !important;
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-weight: 500;
+    }
+    .stButton > button:hover {
+        background-color: #B2DFDB !important;
+        border-color: #004D40 !important;
+    }
+
+    /* 6. Fix Input Box (Make it match the theme) */
+    .stTextInput > div > div > input {
+        color: #31333F !important;
+        background-color: #FFFFFF !important;
+    }
+    
+    /* 7. Hide Streamlit Chrome */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* VOICE MODE STYLES */
     @keyframes breathe {
         0% { transform: scale(1); box-shadow: 0 0 20px rgba(100, 181, 246, 0.2); }
         50% { transform: scale(1.1); box-shadow: 0 0 50px rgba(100, 181, 246, 0.5); }
         100% { transform: scale(1); box-shadow: 0 0 20px rgba(100, 181, 246, 0.2); }
     }
-    
     .voice-container {
         display: flex;
         flex-direction: column;
@@ -54,31 +83,19 @@ st.markdown("""
         height: 60vh;
         margin-top: 50px;
     }
-    
     .voice-orb {
         width: 180px;
         height: 180px;
-        /* Beautiful abstract gradient like ChatGPT */
         background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); 
         border-radius: 50%;
         animation: breathe 4s ease-in-out infinite;
         margin-bottom: 40px;
     }
-    
     .voice-status {
-        font-family: 'Helvetica Neue', sans-serif;
         font-size: 18px;
-        color: #546E7A;
+        color: #546E7A !important;
         font-weight: 500;
-        margin-bottom: 20px;
         text-align: center;
-    }
-
-    /* CENTER AUDIO INPUT WIDGET IN VOICE MODE */
-    div[data-testid="stAudioInput"] {
-        margin: 0 auto;
-        width: 100%;
-        max-width: 400px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -132,7 +149,6 @@ if "last_processed_audio" not in st.session_state:
 if "report_generated" not in st.session_state:
     st.session_state.report_generated = False
 
-# NEW: MODE SWITCH STATE
 if "mode" not in st.session_state:
     st.session_state.mode = "chat" # Options: 'chat', 'voice'
 
@@ -159,7 +175,6 @@ def text_to_speech_autoplay(text):
         return None
 
 def process_ai_response():
-    """Common logic to get AI response and generate speech"""
     try:
         response = model.generate_content(st.session_state.chat_history)
         ai_text = response.text
@@ -177,26 +192,21 @@ def process_ai_response():
         return False
 
 # ==========================================
-# VIEW 1: VOICE MODE (ChatGPT Style)
+# VIEW 1: VOICE MODE
 # ==========================================
 if st.session_state.mode == "voice":
-    
-    # 1. The Visuals (Orb)
     st.markdown("""
         <div class="voice-container">
             <div class="voice-orb"></div>
-            <div class="voice-status">Dr. Gemini is listening...</div>
+            <div class="voice-status">Listening...</div>
         </div>
     """, unsafe_allow_html=True)
     
-    # 2. The Input (Centered Audio Widget)
     audio_val = st.audio_input("🎙️ Tap to Speak")
     
-    # 3. Handle Voice Input
     if audio_val and audio_val != st.session_state.last_processed_audio:
         st.session_state.last_processed_audio = audio_val
         
-        # A. Transcribe
         with st.spinner("Processing voice..."):
             audio_bytes = audio_val.getvalue()
             transcript = transcribe_audio(audio_bytes)
@@ -205,18 +215,16 @@ if st.session_state.mode == "voice":
             st.session_state.messages.append({"role": "user", "content": f"🎙️ {transcript}"})
             st.session_state.chat_history.append({"role": "user", "parts": [transcript]})
             
-            # B. Generate AI Response
+            # Generate AI Response
             if process_ai_response():
-                # Force rerun to play the audio immediately
                 st.rerun()
 
-    # 4. Play Latest AI Audio (Auto-play in voice mode)
+    # Auto-play audio
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
         last_msg = st.session_state.messages[-1]
         if "audio" in last_msg and last_msg["audio"]:
              st.audio(last_msg["audio"], format="audio/mp3", autoplay=True)
 
-    # 5. Exit Button (Bottom)
     st.markdown("<br><br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -224,34 +232,28 @@ if st.session_state.mode == "voice":
             st.session_state.mode = "chat"
             st.rerun()
 
-
 # ==========================================
-# VIEW 2: STANDARD CHAT MODE
+# VIEW 2: CHAT MODE
 # ==========================================
-else: # st.session_state.mode == "chat"
-    
+else: 
     st.title("🍃 MindfulAI Screener")
     
-    # 1. Mode Switcher (Top Rightish)
     col_a, col_b = st.columns([3, 1])
     with col_b:
         if st.button("🎙️ Voice Mode", type="primary"):
             st.session_state.mode = "voice"
             st.rerun()
 
-    # 2. Display History
     for msg in st.session_state.messages:
         if msg["role"] == "assistant":
             with st.chat_message("assistant", avatar="🌿"): 
                 st.write(msg["content"])
-                # Optional: Small play button if audio exists, but don't autoplay in chat mode
                 if "audio" in msg and msg["audio"]:
                      st.audio(msg["audio"], format="audio/mp3", start_time=0)
         else:
             with st.chat_message("user", avatar="👤"): 
                 st.write(msg["content"])
 
-    # 3. Text Input Logic
     if not st.session_state.report_generated:
         text_val = st.chat_input("Type your answer here...")
         
@@ -267,7 +269,6 @@ else: # st.session_state.mode == "chat"
                     if process_ai_response():
                         st.rerun()
 
-    # 4. Report Generation (Only visible in chat mode)
     if not st.session_state.report_generated:
         st.markdown("---")
         if st.button("📋 End Session & Generate Report", type="secondary", use_container_width=True):
@@ -295,7 +296,6 @@ else: # st.session_state.mode == "chat"
                 except Exception as e:
                     st.error(f"Analysis Failed: {e}")
 
-    # 5. Display Report
     if st.session_state.report_generated and "final_report_json" in st.session_state:
         try:
             data = json.loads(st.session_state.final_report_json)
@@ -307,7 +307,6 @@ else: # st.session_state.mode == "chat"
                 st.table(df)
                 csv = df.to_csv(index=False).encode('utf-8')
                 st.download_button("💾 Download CSV", csv, "assessment.csv", "text/csv")
-                
         except:
             st.error("Could not parse report.")
         
@@ -315,7 +314,7 @@ else: # st.session_state.mode == "chat"
             st.session_state.clear()
             st.rerun()
 
-# --- SIDEBAR (Shared) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.title("🍃 Controls")
     if st.button("🔄 Reset App", type="secondary"):
